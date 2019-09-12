@@ -268,21 +268,28 @@ func (g *Gateway) acceptVirtualConn(pair [2]*link.Session, session *link.Session
 	for i := 0; i < 2; i++ {
 		state := pair[i].State.(*gwState)
 
-		state.Lock()
-		defer state.Unlock()
-		if state.disposed {
+		checkOk := func () bool {
+			state.Lock()
+			defer state.Unlock()
+			if state.disposed {
+				return false
+			}
+
+			if pair[i] == session && maxConn != 0 && len(state.virtualConns) >= maxConn {
+				return false
+			}
+
+			if _, exists := state.virtualConns[connID]; exists {
+				panic("Virtual Connection Already Exists")
+			}
+
+			state.virtualConns[connID] = struct{}{}
+
+			return true
+		}
+		if !checkOk() {
 			return false
 		}
-
-		if pair[i] == session && maxConn != 0 && len(state.virtualConns) >= maxConn {
-			return false
-		}
-
-		if _, exists := state.virtualConns[connID]; exists {
-			panic("Virtual Connection Already Exists")
-		}
-
-		state.virtualConns[connID] = struct{}{}
 	}
 
 	g.addVirtualConn(connID, pair)
@@ -306,12 +313,14 @@ func (g *Gateway) closeVirtualConn(connID uint32) {
 
 	for i := 0; i < 2; i++ {
 		state := pair[i].State.(*gwState)
-		state.Lock()
-		defer state.Unlock()
-		if state.disposed {
-			continue
-		}
-		delete(state.virtualConns, connID)
-		g.send(pair[i], g.encodeCloseCmd(connID))
+		func() {
+			state.Lock()
+			defer state.Unlock()
+			if state.disposed {
+				return
+			}
+			delete(state.virtualConns, connID)
+			g.send(pair[i], g.encodeCloseCmd(connID))
+		}()
 	}
 }
